@@ -34,7 +34,7 @@ This repository contains the R tutorial notebook and R scripts accompanying the 
   - iter = 6000, warmup = 1000, chains = 10, show_messages = FALSE, adapt_delta = 0.9. rstan control parameters for the model fit.
 
 * prop_n1_below_above_threshold.R - This function is called by the notebook file. Function to compute the proportion of posterior distribution of n1 that is above and below certain threshold values. Function arguments:
-* 
+ 
   - n1: Posterior distribution of n1. Taken from a Stan model fit.
   
   - below_threshold: Compute how much mass of the posterior distribution of n1 is below this threshold.
