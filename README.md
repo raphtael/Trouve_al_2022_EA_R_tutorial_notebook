@@ -53,3 +53,7 @@ This repository contains the R tutorial notebook and R scripts accompanying the 
 
 * stan_beta_binomial.R - This function is called by the notebook file. Simulate an onshore inspection. Stan code for the Beta-binomial model used to infer the sample size of an offshore inspection (n1).
 
+
+Cite the data:
+[![DOI](https://zenodo.org/badge/433243605.svg)](https://zenodo.org/badge/latestdoi/433243605)
+
