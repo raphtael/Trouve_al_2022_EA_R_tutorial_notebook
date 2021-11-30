@@ -14,11 +14,13 @@ Trouve_al_2021_EA_R_notebook.Rmd
 * Trouve_al_2021_EA_R_notebook.html – Notebook output in an html format. 
 
 * fit_stan_model.R – This function is called by the notebook file. Function fitting a Stan model inferring the posterior distribution of n1.
+
   ...- model: Stan model to fit, expressed as a string.
-  ...- n2: Sample size of the onshore inspection
+  
+  ...- n2: Sample size of the onshore inspection.
   ...- a and b: parameters from the Beta-Binomial distribution.
   ...- k: Vector for the number of infested units found in each onshore inspections.
-  ...- prior_expected_n1: Expected offshore inspection sample size (usually 600)
+  ...- prior_expected_n1: Expected offshore inspection sample size (usually 600).
   ...- iter = 6000, warmup = 1000, chains = 10, show_messages = FALSE, adapt_delta = 0.9. rstan control parameters for the model fit.
 
 * prop_n1_below_above_threshold.R - This function is called by the notebook file. Function to compute the proportion of posterior distribution of n1 that is above and below certain threshold values    
