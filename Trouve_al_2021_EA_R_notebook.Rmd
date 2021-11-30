@@ -1,0 +1,182 @@
+---
+title: "R tutorial"
+author: "Raphael Trouve, Anthony D. Arthur, and Andrew P. Robinson"
+date: "April 2021"
+output:
+  html_document: default
+subtitle: Assessing the quality of offshore Binomial sampling biosecurity inspections using onshore inspections.
+---
+
+```{r setup}
+# Suppress Stan progress bars and messages
+  knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+# load libraries
+  library(ggplot2)                          # Create figures
+  library(data.table)                       # Streamline applying a function to each group.
+  library(emdbook)                          # Sample from a beta-binomial distribution
+  library(rstan)                            # Bayesian inference using Stan
+  library(bang)                             # For conjugate beta-binomials models and posterior predictive checks
+# Load custom functions (these files should be located in the same folder as the R notebook)  
+  source('simulate_onshore_inspections.R')  # Simulate an onshore inspection
+  source('fit_stan_model.R')                # Function to fit the Stan model and recover the posterior distribution of n1
+  source('prop_n1_below_above_threshold.R') # Function to compute the proportion of posterior distribution of n1 that is above a certain threshold value 
+  source('stan_beta_binomial.R')            # Load Beta-Binomial Stan model in R
+  set.seed(1001)                            # Set the random seed of the R session to allow reproducible simulations
+```
+
+
+## Introduction
+This R notebook illustrates how to use R and Stan to run the analyses presented in the manuscript entitled:
+`Assessing the quality of offshore Binomial sampling biosecurity inspections using onshore inspections' published in Ecological Applications. 
+
+To save computation time when running the analyses on a notebook, we have reduced the number of simulations and Stan fit MCMC iterations compared to the analyses presented in the manuscript. 
+We also illustrates our analyses on a single pathway in the notebook (the Orchid pathway) vs. six pathways in the manuscript.
+
+To successfully run this notebook, the `fit_stan_model.R', `prop_n1_below_above_threshold.R', `simulate_onshore_inspections.R', and `stan_beta_binomial.R' files should be located in the same folder as the notebook. The `ggplot2', `data.table', `emdbook', `rstan', and `bang' packages will also need to be installed in the computer. 
+
+## Calibrating the reference distribution from past inspection data on the pathway
+The first step of the analysis is to calibrate the reference distribution, i.e., the distribution of infestation rate typically found among consignments of the pathway, from past inspection data.
+The R code below illustrates how to use the `bang' package to fit this reference distribution. 
+
+```{r past_data}
+# Fit a beta binomial distribution to past inspection data on the pathway (figure 3 of the manuscript) 
+  # Simulate past data based on the Orchid pathway in the manuscript (a = 0.193, b = 8.82). 
+  # For confidentiality reasons, we will used simulated data rather than the original dataset in this tutorial.
+    k = simulate_onshore_inspections(n_cons = 320, a = 0.193, b = 8.82, n2 = 600) # Vector of k infested units found in n_cons past onshore inspections
+  # Fit Beta-Binomial model to past data on the pathway
+    data_for_hef <- cbind.data.frame(y = k, n = rep(600, 320))                                    
+    reference_distribution <- hef(model = "beta_binom", data = data_for_hef, nrep = 50, n = 2000) 
+  # Posterior mean of the parameters and posterior predictive check of the model
+    parameter_values <- cbind.data.frame(reference_distribution$sim_vals)
+    colMeans(parameter_values)                           
+    pp_check(reference_distribution, 'ecdf_overlay', discrete = T)
+```
+
+
+## Posterior distribution of n1 for different number of infested sample found in a single onshore inspection
+After collecting onshore inspection data, we can make inference on the offshore inspection sample size n1. 
+Inference on n1, in the form of a posterior distribution, will depend on the number of infested units k found onshore.
+
+Below, we use Stan to make inference on n1 given the offshore sample size n2, the parameters of the reference distribution a and b, and the number of infested units k found in a single onshore inspection as inputs. 
+We then check whether estimated n1 is consistent with the prescribed offshore sample size n1 (in this case 600).
+
+```{r posterior_distribution}
+# Bayesian inference on n1 when varying the number of infested sample found k found in a single onshore inspection (figure 2)
+  # Compile Stan model
+    stan_beta_binomial_compiled <- stan_model(model_code = stan_beta_binomial)        
+  # Experimental design
+    data_sim <- expand.grid(k = c(0, 2, 4, 6), n2 = 600, a = 0.193, b = 8.82, prior_expected_n1 = 600) # Vary k, use parameters values from the Orchid pathway
+    data_sim <- as.data.table(data_sim)
+  # Fit a separate Stan model for each value of k.
+    data_results <- data_sim[, fit_stan_model(model = stan_beta_binomial_compiled, 
+                                              n2 = n2, 
+                                              a = a, 
+                                              b = b, 
+                                              k = k, 
+                                              prior_expected_n1 = prior_expected_n1, 
+                                              warmup = 6000, 
+                                              iter = 11000, 
+                                              chain = 10), 
+                             by = k]
+  # Generate density kernel for the figure
+    density_kernel <- data_results[, list(x = density(x = n1, n = 10000, adjust = 1.9)$x, 
+                                          y = density(x = n1, n = 10000)$y, 
+                                          adjust = 1.9), 
+                                   by = k]
+  # Plot
+    ggplot(data = data_results, aes(n1, col = as.factor(k))) + 
+      coord_cartesian(xlim = c(0, 875), ylim = c(0, 0.0072)) +
+      geom_vline(xintercept = 600, lty = 2) + 
+      geom_ribbon(data = density_kernel[x <= 600, ], aes(x = x, ymax = y, fill = as.factor(k)), ymin = 0, col = NA, alpha = 0.3) + 
+      geom_line(data = density_kernel, aes(x, y, col = as.factor(k))) 
+  # Proportion of posterior n1 probability below threshold
+    data_results[, .(prop_n1_below_600 = round(sum(n1 < 600) / .N, 2)), by = k]  
+```
+
+
+## How many infested samples onshore in a single inspection are sufficient to reject the presence of an offshore inspection?
+
+Rather than show the whole posterior distribution of n1, we might only be interested in the proportion of the posterior probability distribution of n1 that falls below a prescribed n1 value.
+The R code below shows how to compute this quantity from a Stan fit and how it varies with the number of infested units k found in a single onshore inspection.
+
+
+```{r, posterior_density_below_600}
+# Posterior probability of estimated n1 that is below the prescribed n1 value vs. k (figure 4)
+  # Design of the computational experiment for the Orchids pathway.
+    data_sim <- data.table(pathway = 'Orchids', 
+                           k = seq(0, 8, by = 1), 
+                           n2 = 600, 
+                           prior_expected_n1 = 600,
+                           a = 0.193, 
+                           b = 8.82)                      
+  # Fit the Stan beta-binomial model per pathway and per k value  
+    data_results <- data_sim[, prop_n1_below_above_threshold(n1 = as.data.frame(fit_stan_model(model = stan_beta_binomial_compiled,
+                                                                                               n2 = n2, 
+                                                                                               a = a, 
+                                                                                               b = b,
+                                                                                               k = as.array(k), 
+                                                                                               prior_expected_n1 = prior_expected_n1, 
+                                                                                               iter = 11000,  
+                                                                                               chains = 1),  # chain = 10 in the manuscript
+                                                                                               pars = 'n1')$n1, # Posterior distribution of n1 obtained from a Stan fit
+                                                             below_threshold = prior_expected_n1, 
+                                                             above_threshold = 400),
+                             by = .(pathway, k)] # Compute for each pathway and each k
+  # Plot   
+    ggplot(data = data_results, aes(k, prop_below)) + 
+      geom_point() + 
+      geom_line() + 
+      facet_wrap(~pathway) +
+      geom_hline(yintercept = 0.95, lty = 2) +
+      xlab('Number of infested units k found in a unique onshore inspection') +
+      ylab('Posterior probability of estimated n1 \n that is below the prescribed n1 value')
+```
+
+
+
+## How many successive inspections are necessary to reject or accept the presence of an offshore inspection in practice?
+While it is useful to know how our ability to reject the presence of an offshore inspection changes with the number of infested units k found in a single onshore inspection, to get a more complete picture of how the method will work in practice we also need to know how frequently we expect to see each k values for different pathways.
+Additionally, it is also useful to know how the method will perform when combining data from several onshore inspections.
+
+The below R code runs a statistical power analysis computing how many inspected onshore consignments would be necessary in practice before making a decision on the presence or absence of appropriate offshore inspection.
+
+
+```{r, stat_power}
+# Statistical power to reject and accept the presence of a quality offshore inspection vs. number of onshore inspections (figures 5 and 6)
+  # Design of the computational experiment for the Orchids pathway. 
+  # Note that we only ran 20 simulation in the notebook (vs. 10,000 in the manuscript) to save time. 
+  # We also reduced the number of iterations of the Stan fit compared to the manuscript
+    data_sim <- expand.grid(pathway = 'Orchids', n_cons = c(1, seq(5, 25, by = 5), seq(30, 100, by = 10)), sim = 1:20, actual_n1 = c(0, 200, 600))  
+    data_sim <- as.data.table(data_sim)
+    data_sim[, n2 := 600]
+    data_sim[, prior_expected_n1 := 600]
+    data_sim[, a := 0.193]
+    data_sim[, b := 8.82]
+  # Fit a Stan beta-binomial model for each combination of pathway, number of onshore inspections, actual_n1, and simulations (i.e., replicates).
+    data_results <- data_sim[, prop_n1_below_above_threshold(n1 = as.data.frame(fit_stan_model(model = stan_beta_binomial_compiled, 
+                                                                                               n2 = n2, 
+                                                                                               a = a, 
+                                                                                               b = b,
+                                                                                               k = as.array(simulate_onshore_inspections(n_cons = n_cons, a = a, b = b + actual_n1, n2 = n2)), # Simulate k
+                                                                                               prior_expected_n1 = prior_expected_n1, 
+                                                                                               iter = 2000, # iter = 11000 in the manuscript
+                                                                                               chain = 1), 
+                                                                                               pars = 'n1')$n1, 
+                                                             below_threshold = 600, 
+                                                             above_threshold = 400),
+                             by = .(pathway, n_cons, sim, actual_n1)]
+  # Compute statistical power
+    data_results_summary <- data_results[, .(stat_power_reject = sum(prop_below > 0.95) / .N, 
+                                             stat_power_accept = sum(prop_above > 0.95) / .N),
+                                         by = .(pathway, n_cons, actual_n1)]
+    data_results_summary_long <- melt(data_results_summary, id.vars = c('pathway', 'n_cons', 'actual_n1'))
+  # Plot
+    ggplot(data = data_results_summary_long, aes(n_cons, value, col = as.factor(actual_n1))) + 
+      geom_point() + 
+      geom_line() +
+      facet_grid(variable ~ pathway, switch = 'y') +
+      scale_x_continuous(breaks = seq(0, 100, by = 20)) + 
+      scale_y_continuous(breaks = seq(0, 1, by = 0.2), limits = c(0, 1)) +
+      xlab('Number of inspected consignments')
+```
+
